@@ -1,4 +1,4 @@
-[travel_expense_tracker.html](https://github.com/user-attachments/files/28750830/travel_expense_tracker.html)
+[travel_expense_tracker.html](https://github.com/user-attachments/files/28751036/travel_expense_tracker.html)
 <!DOCTYPE html>
 <html lang="ko">
 <head>
@@ -557,13 +557,31 @@
         <input type="file" id="receiptFile" accept="image/*" capture="environment" onchange="handleReceiptFile(event)">
       </div>
       <div id="scanStatus"></div>
-      <!-- 여러 항목 선택 UI (영수증에 여러 항목이 있을 때) -->
+      <!-- 여러 항목 선택 UI -->
       <div id="multiItemArea" style="display:none">
         <div class="scan-result">
-          <div class="result-title">✅ 항목을 선택해 폼에 채우기</div>
+          <div class="result-title" style="justify-content:space-between">
+            <span>✅ 추가할 항목 선택 (복수 선택 가능)</span>
+            <span onclick="toggleSelectAll()" style="cursor:pointer;font-size:12px;color:var(--primary)">전체선택</span>
+          </div>
           <div class="multi-item-list" id="scanItems"></div>
         </div>
-        <button class="btn-scan-apply" onclick="fillFormFromScan()" style="margin-top:8px">선택 항목을 폼에 채우기</button>
+        <div class="form-group" style="margin-top:10px">
+          <label class="form-label">납부자</label>
+          <select class="form-input" id="scanPayer"></select>
+        </div>
+        <div class="form-group">
+          <label class="form-label">지출 유형</label>
+          <div class="type-toggle">
+            <button class="type-btn shared active" id="scanTypeShared" onclick="setScanType('shared')">🤝 공동</button>
+            <button class="type-btn personal" id="scanTypePersonal" onclick="setScanType('personal')">👤 개인</button>
+          </div>
+        </div>
+        <div class="form-group" id="scanPersonalGroup" style="display:none">
+          <label class="form-label">해당 멤버</label>
+          <select class="form-input" id="scanPersonalMember"></select>
+        </div>
+        <button class="btn-scan-apply" onclick="addAllSelectedItems()" style="margin-top:8px">선택 항목 모두 추가하기</button>
       </div>
     </div>
 
@@ -725,7 +743,22 @@ function switchTab(tab) {
 
 // ── 영수증 스캔 (직접입력 폼 자동채우기) ────────────────
 
-let scanState = { items: [], selectedIdx: 0 };
+let scanState = { items: [], selected: new Set(), scanType: 'shared' };
+
+function setScanType(type) {
+  scanState.scanType = type;
+  document.getElementById('scanTypeShared').classList.toggle('active', type === 'shared');
+  document.getElementById('scanTypePersonal').classList.toggle('active', type === 'personal');
+  document.getElementById('scanPersonalGroup').style.display = type === 'personal' ? 'block' : 'none';
+}
+
+function updateScanSelects() {
+  const opts = state.members.length
+    ? state.members.map(m => `<option value="${m}">${m}</option>`).join('')
+    : '<option value="">-- 멤버를 먼저 추가해주세요 --</option>';
+  document.getElementById('scanPayer').innerHTML = opts;
+  document.getElementById('scanPersonalMember').innerHTML = `<option value="">-- 선택 --</option>` + opts;
+}
 
 function handleDrop(e) {
   e.preventDefault();
@@ -798,10 +831,12 @@ async function analyzeReceipt(dataUrl) {
 5. 개별 항목들 찾기 (메뉴명+금액)
 
 응답 형식:
-{"currency":"통화코드(KRW/JPY/USD/EUR/CNY/THB/VND/TWD/HKD/GBP/AUD/SGD/MYR/PHP 중 하나)","store":"가게명또는null","date":"YYYY-MM-DD또는null","total":총금액숫자,"items":[{"name":"항목명","amount":금액숫자}]}
+{"currency":"통화코드(KRW/JPY/USD/EUR/CNY/THB/VND/TWD/HKD/GBP/AUD/SGD/MYR/PHP 중 하나)","store":"가게명또는null","date":"YYYY-MM-DD또는null","total":총금액숫자,"items":[{"name":"한국어번역 (원어)","amount":금액숫자}]}
 
 중요 규칙:
 - amount는 반드시 숫자(쉼표/통화기호 제거)
+- name은 반드시 "한국어번역 (원어)" 형식으로 표기 (예: "페이스 크림 케이스 (ティクリームケースフェイス)", "치킨버거 (Chicken Burger)")
+- 원어가 한국어인 경우 번역 없이 그냥 한국어만 표기
 - 개별 항목이 보이면 items에 각각 추가
 - 개별 항목 없이 합계만 있으면 items에 {"name":"가게명또는영수증지출","amount":합계금액} 하나만
 - 영수증이 아닌 이미지면 {"currency":"KRW","store":null,"date":null,"total":0,"items":[]}` }
@@ -853,7 +888,10 @@ async function analyzeReceipt(dataUrl) {
     if (scanState.items.length === 1) {
       fillSingleItem(scanState.items[0]);
     } else {
-      scanState.selectedIdx = 0;
+      // 모든 항목 기본 선택
+      scanState.selected.clear();
+      scanState.items.forEach((_, i) => scanState.selected.add(i));
+      updateScanSelects();
       renderScanItems();
       document.getElementById('multiItemArea').style.display = 'block';
     }
@@ -882,28 +920,69 @@ function fillSingleItem(item) {
 function renderScanItems() {
   const el = document.getElementById('scanItems');
   el.innerHTML = scanState.items.map((it, i) => `
-    <div class="scan-result-item ${i === scanState.selectedIdx ? 'selected' : ''}" onclick="selectScanItem(${i})">
+    <div class="scan-result-item ${scanState.selected.has(i) ? 'selected' : ''}" onclick="toggleScanItem(${i})">
       <div>
         <div class="item-name">${it.name}</div>
         <div class="item-date">${it.date}</div>
       </div>
       <div style="display:flex;align-items:center;gap:8px">
-        <div class="item-amt">${it.amount.toLocaleString()}원</div>
-        <span style="font-size:16px">${i === scanState.selectedIdx ? '✅' : '⬜'}</span>
+        <div class="item-amt">${fmt(it.amount)}</div>
+        <span style="font-size:18px">${scanState.selected.has(i) ? '✅' : '⬜'}</span>
       </div>
     </div>`).join('');
 }
 
-function selectScanItem(i) {
-  scanState.selectedIdx = i;
+function toggleScanItem(i) {
+  if (scanState.selected.has(i)) scanState.selected.delete(i);
+  else scanState.selected.add(i);
+  renderScanItems();
+}
+
+function toggleSelectAll() {
+  if (scanState.selected.size === scanState.items.length) {
+    scanState.selected.clear();
+  } else {
+    scanState.items.forEach((_, i) => scanState.selected.add(i));
+  }
   renderScanItems();
 }
 
 function fillFormFromScan() {
-  const item = scanState.items[scanState.selectedIdx];
-  if (!item) return;
-  fillSingleItem(item);
+  const i = [...scanState.selected][0];
+  if (i === undefined) return;
+  fillSingleItem(scanState.items[i]);
   document.getElementById('multiItemArea').style.display = 'none';
+}
+
+async function addAllSelectedItems() {
+  if (state.members.length === 0) return alert('멤버를 먼저 추가해주세요');
+  if (scanState.selected.size === 0) return alert('추가할 항목을 선택해주세요');
+
+  const payer = document.getElementById('scanPayer').value;
+  if (!payer) return alert('납부자를 선택해주세요');
+
+  const type = scanState.scanType;
+  const personalMember = type === 'personal' ? document.getElementById('scanPersonalMember').value : null;
+  if (type === 'personal' && !personalMember) return alert('개인 지출 대상 멤버를 선택해주세요');
+
+  let count = 0;
+  for (const i of scanState.selected) {
+    const it = scanState.items[i];
+    const expense = {
+      id: Date.now() + i,
+      type, name: it.name, amount: it.amount,
+      date: it.date, payer,
+      memo: '영수증 자동입력',
+      personalMember: type === 'personal' ? personalMember : null
+    };
+    state.expenses.push(expense);
+    saveToSheet(expense);
+    count++;
+  }
+
+  updateSummary();
+  resetScanArea();
+  showToast(`✅ ${count}개 항목이 추가됐어요! Google Sheets에도 저장됐어요`);
 }
 
 // 폼 초기화 시 스캔 영역도 리셋
@@ -914,7 +993,7 @@ function resetScanArea() {
   document.getElementById('multiItemArea').style.display = 'none';
   document.getElementById('autofillBadge').style.display = 'none';
   document.getElementById('receiptFile').value = '';
-  scanState = { items: [], selectedIdx: 0 };
+  scanState = { items: [], selected: new Set(), scanType: 'shared' };
 }
 
 function addMember() {
